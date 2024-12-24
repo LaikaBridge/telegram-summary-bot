@@ -4,6 +4,6 @@ CREATE TABLE IF NOT EXISTS Messages (
 	timeStamp INTEGER NOT NULL,
 	userName TEXT,
 	content TEXT,
-	messageId INTEGER,
+	messageId TEXT,
 	groupName TEXT
 );

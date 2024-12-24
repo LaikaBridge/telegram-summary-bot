@@ -21,13 +21,19 @@ export type PhotoId = {url: string}
 export type Photo = {
     file_id: PhotoId
 }
-interface CtxCommandData{
+export interface CtxCommandData{
     update_type: "message" | "photo" | "command"
     update: {
         message:{
             photo: Photo[];
+            sender_chat:{
+                title: string
+            }
             from: {
                 id: string;
+                username: string;
+                first_name: string;
+                is_bot: boolean
             }
             chat: {
                 type: "group"
@@ -60,7 +66,7 @@ interface Handlers{
 }
 
 export function getMessageLink(r: R){
-    return `https://matrix.example.com/c/${parseInt(r.groupId.slice(2))}/${r.messageId}`
+    return `https://matrix.to/#/${r.groupId}/${r.messageId}`
 }
 export class MockBot{
     responseData: Reply[] = [];

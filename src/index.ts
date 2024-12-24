@@ -3,7 +3,7 @@ import { GenerationConfig, GoogleGenerativeAI, HarmBlockThreshold, HarmCategory,
 import { Buffer } from 'node:buffer';
 import { isJPEGBase64 } from './isJpeg';
 import { extractAllOGInfo } from "./og"
-import { MockBot, Reply, R, getMessageLink} from "./bot"
+import { MockBot, Reply, R, getMessageLink, CtxCommandData} from "./bot"
 async function dispatchContent(content: string) {
 	if (content.startsWith("data:image/jpeg;base64,")) {
 		return {
@@ -365,7 +365,7 @@ ${results.map((r: any) => `${r.userName}: ${r.content} ${r.messageId == null ? "
 					await bot.reply('I am a bot, please add me to a group to use me.');
 					return new Response('ok');
 				}
-				function getUserName(msg: any) {
+				function getUserName(msg: CtxCommandData['update']['message']) {
 					if (msg.from?.username === "Channel_Bot" && msg.from?.is_bot) {
 						return msg.sender_chat.title as string;
 					}
