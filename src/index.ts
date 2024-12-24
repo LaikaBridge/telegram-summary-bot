@@ -1,9 +1,9 @@
-import TelegramBot, { TelegramApi } from '@codebam/cf-workers-telegram-bot';
+//import TelegramBot, { TelegramApi } from '@codebam/cf-workers-telegram-bot';
 import { GenerationConfig, GoogleGenerativeAI, HarmBlockThreshold, HarmCategory, SchemaType } from '@google/generative-ai';
-import telegramifyMarkdown from "telegramify-markdown"
 import { Buffer } from 'node:buffer';
 import { isJPEGBase64 } from './isJpeg';
 import { extractAllOGInfo } from "./og"
+import { MockBot, Reply, R, getMessageLink} from "./bot"
 async function dispatchContent(content: string) {
 	if (content.startsWith("data:image/jpeg;base64,")) {
 		return {
@@ -19,8 +19,8 @@ async function dispatchContent(content: string) {
 	return content;
 }
 
-function getMessageLink(r: R) {
-	return `https://t.me/c/${parseInt(r.groupId.slice(2))}/${r.messageId}`;
+function telegramifyMarkdown(x: string, ...args: string[]){
+	return x
 }
 
 function getSendTime(r: R) {
@@ -32,7 +32,7 @@ function getSendTime(r: R) {
  * @returns {string} 上标形式的数字
  */
 export function toSuperscript(num: number) {
-	const superscripts = {
+	const superscripts: Record<string, string> = {
 		'0': '⁰',
 		'1': '¹',
 		'2': '²',
@@ -91,17 +91,11 @@ export function processMarkdownLinks(text: string, options: { prefix: string, us
 	});
 }
 
-type R = {
-	groupId: string;
-	userName: string;
-	content: string;
-	messageId: number;
-	timeStamp: number;
-}
+
 
 function getGenModel(env: Env) {
 	const model = "gemini-2.0-flash-exp";
-	const gateway_name = "telegram-summary-bot";
+	const gateway_name = env.cf_ai_gateway_name;
 	const genAI = new GoogleGenerativeAI(env.GEMINI_API_KEY);
 	const account_id = env.account_id;
 	// TODO
@@ -155,97 +149,13 @@ function getCommandVar(str: string, delim: string) {
 }
 
 function messageTemplate(s: string) {
-	return `下面由免费 gemini 2.0 概括群聊信息\n` + s + `本开源项目[地址](https://github.com/asukaminato0721/telegram-summary-bot)`;
+	return `下面由免费 Gemini 2.0 概括群聊信息\n` + s + `本开源项目[地址](https://github.com/asukaminato0721/telegram-summary-bot)与[Fork地址](https://github.com/LaikaBridge/telegram-summary-bot)`;
 }
 
 export default {
-	async scheduled(
-		controller: ScheduledController,
-		env: Env,
-		ctx: ExecutionContext,
-	) {
-		await env.DB.prepare(`
-			CREATE INDEX IF NOT EXISTS idx_messages_groupid_timestamp
-			ON Messages(groupId, timeStamp DESC);
-		  `).run();
-		// Clean up oldest 4000 messages
-		await env.DB.prepare(`
-					DELETE FROM Messages
-					WHERE id IN (
-						SELECT id
-						FROM (
-							SELECT
-								id,
-								ROW_NUMBER() OVER (
-									PARTITION BY groupId
-									ORDER BY timeStamp DESC
-								) as row_num
-							FROM Messages
-						) ranked
-						WHERE row_num > 4000
-					);`)
-			.run();
-		const { results: groups } = await env.DB.prepare(`
-			SELECT DISTINCT groupId
-			FROM Messages
-			ORDER BY groupId`).all();
-
-		const batch = Math.floor((new Date()).getUTCMinutes() / 10); // 0 <= batch < 6
-
-		for (const [id, group] of groups.entries()) {
-			if (id % 6 !== batch) {
-				continue;
-			}
-			const { results } = await env.DB.prepare('SELECT * FROM Messages WHERE groupId=? AND timeStamp >= ? ORDER BY timeStamp ASC LIMIT 2000')
-				.bind(group.groupId, Date.now() - 24 * 60 * 60 * 1000)
-				.all();
-
-			if (results.length > 0) {
-				const result = await getGenModel(env).generateContent([
-					`用符合风格的语气概括下面的对话, 对话格式为 用户名: 发言内容, 相应链接, 如果对话里出现了多个主题, 请分条概括, 涉及到的图片也要提到相关内容, 并在回答的关键词中用 markdown 的格式引用原对话的链接, 格式为
-[引用1](链接本体)
-[引用2](链接本体)
-[关键字1](链接本体)
-[关键字2](链接本体)`,
-					`概括的开头是: 本日群聊总结如下：`,
-					...((await Promise.all(
-						results.map(
-							async (r: any) => [
-								`${r.userName}:`, await dispatchContent(r.content), getMessageLink(r)
-							]
-						)
-					)
-					).flat())]);
-				if ([-1001687785734].includes(parseInt(group.groupId as string))) {
-					// todo: use cloudflare r2 to store skip list
-					continue;
-				}
-
-				// Use fetch to send message directly to Telegram API
-				const res = await fetch(`https://api.telegram.org/bot${env.SECRET_TELEGRAM_API_TOKEN}/sendMessage`, {
-					method: 'POST',
-					headers: {
-						'Content-Type': 'application/json',
-					},
-					body: JSON.stringify({
-						chat_id: group.groupId,
-						text: processMarkdownLinks(telegramifyMarkdown(messageTemplate(result.response.text()), 'keep')),
-						parse_mode: "MarkdownV2",
-					}),
-				});
-				// clean up old images
-				await env.DB.prepare(`
-						DELETE
-						FROM Messages
-						WHERE groupId=? AND timeStamp < ? AND content LIKE 'data:image/jpeg;base64,%'`)
-					.bind(group.groupId, Date.now() - 2 * 24 * 60 * 60 * 1000)
-					.run();
-			}
-		}
-		console.log("cron processed");
-	},
+	
 	fetch: async (request: Request, env: Env, ctx: ExecutionContext) => {
-		await new TelegramBot(env.SECRET_TELEGRAM_API_TOKEN)
+		const resp = await new MockBot(env)
 			.on('status', async (ctx) => {
 				const res = (await ctx.reply('我家还蛮大的'))!;
 				if (!res.ok) {
@@ -270,8 +180,24 @@ export default {
 					LIMIT 2000`)
 					.bind(groupId, `*${messageText.split(" ")[1]}*`)
 					.all();
+				const reply: Reply = {
+					type: "query",
+					payload: []
+				}
+				for(const r of results){
+					reply.payload.push({
+						groupId: r.groupId as string,
+						messageId: (r.messageId ?? "") as string,
+						userName: r.userName as string,
+						content: r.content as string,
+						timeStamp: -1
+					})
+				}
+				/*
 				const res = (await ctx.reply(`查询结果:
 ${results.map((r: any) => `${r.userName}: ${r.content} ${r.messageId == null ? "" : `[link](https://t.me/c/${parseInt(r.groupId.slice(2))}/${r.messageId})`}`).join('\n')}`, "MarkdownV2"))!;
+				*/
+				const res = await ctx.reply(reply);
 				if (!res.ok) {
 					console.error(`Error sending message:`, res);
 				}
@@ -499,7 +425,95 @@ ${results.map((r: any) => `${r.userName}: ${r.content} ${r.messageId == null ? "
 				}
 				return new Response('ok');
 			})
+			.on(":schedule", async (ctx)=>{
+				await env.DB.prepare(`
+					CREATE INDEX IF NOT EXISTS idx_messages_groupid_timestamp
+					ON Messages(groupId, timeStamp DESC);
+				  `).run();
+				// Clean up oldest 4000 messages
+				await env.DB.prepare(`
+							DELETE FROM Messages
+							WHERE id IN (
+								SELECT id
+								FROM (
+									SELECT
+										id,
+										ROW_NUMBER() OVER (
+											PARTITION BY groupId
+											ORDER BY timeStamp DESC
+										) as row_num
+									FROM Messages
+								) ranked
+								WHERE row_num > 4000
+							);`)
+					.run();
+				const { results: groups } = await env.DB.prepare(`
+					SELECT DISTINCT groupId
+					FROM Messages
+					ORDER BY groupId`).all();
+		
+				const batch = Math.floor((new Date()).getUTCMinutes() / 10); // 0 <= batch < 6
+		
+				for (const [id, group] of groups.entries()) {
+					if (id % 6 !== batch) {
+						continue;
+					}
+					const { results } = await env.DB.prepare('SELECT * FROM Messages WHERE groupId=? AND timeStamp >= ? ORDER BY timeStamp ASC LIMIT 2000')
+						.bind(group.groupId, Date.now() - 24 * 60 * 60 * 1000)
+						.all();
+		
+					if (results.length > 0) {
+						const result = await getGenModel(env).generateContent([
+							`用符合风格的语气概括下面的对话, 对话格式为 用户名: 发言内容, 相应链接, 如果对话里出现了多个主题, 请分条概括, 涉及到的图片也要提到相关内容, 并在回答的关键词中用 markdown 的格式引用原对话的链接, 格式为
+		[引用1](链接本体)
+		[引用2](链接本体)
+		[关键字1](链接本体)
+		[关键字2](链接本体)`,
+							`概括的开头是: 本日群聊总结如下：`,
+							...((await Promise.all(
+								results.map(
+									async (r: any) => [
+										`${r.userName}:`, await dispatchContent(r.content), getMessageLink(r)
+									]
+								)
+							)
+							).flat())]);
+						if ([-1001687785734].includes(parseInt(group.groupId as string))) {
+							// todo: use cloudflare r2 to store skip list
+							continue;
+						}
+		
+						ctx.reply(messageTemplate(result.response.text()));
+						// Use fetch to send message directly to Telegram API
+						/*
+						const res = await fetch(`https://api.telegram.org/bot${env.SECRET_TELEGRAM_API_TOKEN}/sendMessage`, {
+							method: 'POST',
+							headers: {
+								'Content-Type': 'application/json',
+							},
+							body: JSON.stringify({
+								chat_id: group.groupId,
+								text: processMarkdownLinks(telegramifyMarkdown(messageTemplate(result.response.text()), 'keep')),
+								parse_mode: "MarkdownV2",
+							}),
+						});
+						*/
+						// clean up old images
+						await env.DB.prepare(`
+								DELETE
+								FROM Messages
+								WHERE groupId=? AND timeStamp < ? AND content LIKE 'data:image/jpeg;base64,%'`)
+							.bind(group.groupId, Date.now() - 2 * 24 * 60 * 60 * 1000)
+							.run();
+					}
+				}
+				console.log("cron processed");
+			})
 			.handle(request.clone());
-		return new Response('ok');
+		if(resp instanceof Response){
+			return resp;
+		}else{
+			return new Response('ok');
+		}
 	},
 };
